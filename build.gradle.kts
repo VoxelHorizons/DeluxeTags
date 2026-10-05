@@ -39,6 +39,7 @@ dependencies {
     implementation("com.github.cryptomorin:XSeries:13.7.0")
     implementation("net.kyori:adventure-text-minimessage:4.17.0")
     implementation("net.kyori:adventure-text-serializer-legacy:4.17.0")
+    implementation("net.kyori:adventure-text-serializer-plain:4.17.0")
     implementation("com.zaxxer:HikariCP:4.0.3")
     implementation("com.mysql:mysql-connector-j:9.7.0")
     implementation("org.slf4j:slf4j-nop:1.7.36")
