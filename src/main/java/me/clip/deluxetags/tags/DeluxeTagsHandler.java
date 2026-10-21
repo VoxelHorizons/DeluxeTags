@@ -2,30 +2,37 @@ package me.clip.deluxetags.tags;
 
 import me.clip.deluxetags.DeluxeTags;
 import org.bukkit.entity.Player;
+import org.bukkit.permissions.Permission;
+import org.bukkit.permissions.PermissionDefault;
+import org.bukkit.plugin.PluginManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import org.bukkit.Bukkit;
 
 public class DeluxeTagsHandler {
 
     private final DeluxeTags plugin;
 
-    private final TreeMap<Integer, DeluxeTag> configTags = new TreeMap<>();
-    private final Map<String, DeluxeTagCategory> categories = new HashMap<>();
-    private final Map<UUID, DeluxeTag> playerTags = new HashMap<>();
+    private final Map<Integer, DeluxeTag> configTags = new ConcurrentSkipListMap<>();
+    private final Map<String, DeluxeTagCategory> categories = new ConcurrentHashMap<>();
+    private final Map<UUID, DeluxeTag> playerTags = new ConcurrentHashMap<>();
+    private final Set<Permission> registeredTagPermissions = new HashSet<>();
 
-    private final List<UUID> playersUsingDefaultTag = new ArrayList<>();
-    private final List<UUID> playersUsingForcedTag = new ArrayList<>();
+    private final List<UUID> playersUsingDefaultTag = new CopyOnWriteArrayList<>();
+    private final List<UUID> playersUsingForcedTag = new CopyOnWriteArrayList<>();
 
     public DeluxeTagsHandler(@NotNull final DeluxeTags plugin) {
         this.plugin = plugin;
@@ -103,8 +110,23 @@ public class DeluxeTagsHandler {
      * @param player Player to update the tag for
      */
     public void updateTagForPlayer(@NotNull final Player player) {
-        // Forced tags take priority over all other tags
+        if (!Bukkit.isPrimaryThread()) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && Bukkit.getPlayer(player.getUniqueId()) == player) updateTagForPlayer(player);
+            });
+            return;
+        }
+        if (!plugin.isSelectionLoaded(player.getUniqueId())) return;
+        // Forced tags take priority over all other tags when explicitly enabled.
         if (plugin.getCfg().forceTags() && setForcedTag(player)) {
+            return;
+        }
+
+        final String uuid = player.getUniqueId().toString();
+
+        // A player explicitly choosing no tag must take priority over default-tag permissions.
+        if (plugin.hasExplicitNoTag(uuid)) {
+            setPlayerTag(player, plugin.getDummyTag());
             return;
         }
 
@@ -124,9 +146,9 @@ public class DeluxeTagsHandler {
             return;
         }
 
-        // The player has no forced, active or default tag. Use the dummy tag TODO: NOT SURE WHY THE DUMMY TAG EXISTS?
+        // The player has no forced, active or default tag. Clear stale saved data and use the dummy tag.
+        if (!plugin.isMySqlStorage()) plugin.clearSavedTag(uuid);
         setPlayerTag(player, plugin.getDummyTag());
-        plugin.removeSavedTag(player.getUniqueId().toString());
     }
 
 
@@ -160,7 +182,19 @@ public class DeluxeTagsHandler {
      * load this tag into the tag list. if a tag with the same priority already exists, it will be overwritten
      */
     public void loadTag(@NotNull final DeluxeTag tag) {
+        registerTagPermission("deluxetags.forcetag." + tag.getIdentifier());
+        registerTagPermission("deluxetags.defaulttag." + tag.getIdentifier());
         configTags.put(tag.getPriority(), tag);
+    }
+
+    private void registerTagPermission(String node) {
+        PluginManager manager = Bukkit.getPluginManager();
+        if (manager.getPermission(node) != null) return;
+
+        // Unregistered Bukkit permissions default to op. These nodes must be opt-in.
+        Permission permission = new Permission(node, PermissionDefault.FALSE);
+        manager.addPermission(permission);
+        registeredTagPermissions.add(permission);
     }
 
     /**
@@ -222,7 +256,7 @@ public class DeluxeTagsHandler {
     /**
      * get a DeluxeTag that is set as the default tag for a player. if the player has multiple default tags, the one with the lowest priority will be returned
      * @param player Player to get the tag for
-     * @return null if the player has no default tag
+     * @return null if player has no default tag
      */
     public @Nullable DeluxeTag getDefaultTag(@NotNull final Player player) {
         return getAllTags().stream()
@@ -416,6 +450,12 @@ public class DeluxeTagsHandler {
         categories.clear();
         playerTags.clear();
 
+        PluginManager manager = Bukkit.getPluginManager();
+        for (Permission permission : registeredTagPermissions) {
+            if (manager.getPermission(permission.getName()) == permission) manager.removePermission(permission);
+        }
+        registeredTagPermissions.clear();
+
         playersUsingDefaultTag.clear();
         playersUsingForcedTag.clear();
     }
@@ -436,7 +476,7 @@ public class DeluxeTagsHandler {
 
     private boolean setSavedTag(@NotNull final Player player) {
         final String identifier = plugin.getSavedTagIdentifier(player.getUniqueId().toString());
-        if (identifier == null) {
+        if (identifier == null || plugin.hasExplicitNoTag(player.getUniqueId().toString())) {
             return false;
         }
 
@@ -455,8 +495,8 @@ public class DeluxeTagsHandler {
             return false;
         }
 
+        // Default tags are fallbacks, not forced selections. Do not mark them as non-removable.
         setPlayerTag(player, tag);
-        playersUsingForcedTag.add(player.getUniqueId());
         return true;
     }
 

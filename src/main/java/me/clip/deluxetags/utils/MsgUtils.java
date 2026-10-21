@@ -8,6 +8,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -28,6 +30,14 @@ public class MsgUtils {
     )));
     private static final boolean SUPPORTS_HEX_COLORS = supportsHexColors();
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+    private static final MiniMessage MINI_MESSAGE_OUTPUT = MiniMessage.builder().strict(true).build();
+    private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile(
+        "\u00A7x(?:\u00A7[0-9a-f]){6}|&x(?:&[0-9a-f]){6}|[&\u00A7]#[0-9a-f]{6}|[&\u00A7][0-9a-fk-or]",
+        Pattern.CASE_INSENSITIVE);
+    private static final String[] LEGACY_TAGS = {
+        "black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple",
+        "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"
+    };
     private static final LegacyComponentSerializer MINI_MESSAGE_SERIALIZER = SUPPORTS_HEX_COLORS
         ? LegacyComponentSerializer.builder()
             .character('\u00A7')
@@ -68,6 +78,64 @@ public class MsgUtils {
         }
 
         return ChatColor.translateAlternateColorCodes('&', input);
+    }
+
+    /** Returns a self-contained MiniMessage representation without legacy codes. */
+    public static String toMiniMessage(String input) {
+        return input == null || input.isEmpty() ? input : MINI_MESSAGE_OUTPUT.serialize(toComponent(input));
+    }
+
+    /** Returns visible text, removing both supported MiniMessage and legacy formatting. */
+    public static String stripFormatting(String input) {
+        return input == null || input.isEmpty() ? input : PlainTextComponentSerializer.plainText().serialize(toComponent(input));
+    }
+
+    private static Component toComponent(String input) {
+        if (miniMessage && containsMiniMessageTag(input)) {
+            // Normalize legacy formatting from nested placeholders before MiniMessage parsing.
+            return MINI_MESSAGE.deserialize(legacyToMiniMessage(escapeUnsupportedTags(input)));
+        }
+
+        // Unlike legacy chat output, component output can retain RGB on every server version.
+        Matcher matcher = PATTERN.matcher(input);
+        StringBuffer converted = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(converted, Matcher.quoteReplacement(toLegacyHex(matcher.group(1))));
+        }
+        matcher.appendTail(converted);
+        return MINI_MESSAGE.deserialize(legacyToMiniMessage(MINI_MESSAGE.escapeTags(converted.toString())));
+    }
+
+    private static String legacyToMiniMessage(String input) {
+        Matcher matcher = LEGACY_CODE_PATTERN.matcher(input);
+        StringBuffer converted = new StringBuffer();
+        while (matcher.find()) {
+            String code = matcher.group().toLowerCase(Locale.ROOT);
+            char value = code.charAt(1);
+            String replacement;
+            if (value == 'x') {
+                replacement = "<reset><#" + code.substring(2).replace("\u00A7", "").replace("&", "") + ">";
+            } else if (value == '#') {
+                replacement = "<reset><" + code.substring(1) + ">";
+            } else {
+                int colorIndex = "0123456789abcdef".indexOf(value);
+                if (colorIndex >= 0) {
+                    replacement = "<reset><" + LEGACY_TAGS[colorIndex] + ">";
+                } else {
+                    switch (value) {
+                        case 'k': replacement = "<obfuscated>"; break;
+                        case 'l': replacement = "<bold>"; break;
+                        case 'm': replacement = "<strikethrough>"; break;
+                        case 'n': replacement = "<underlined>"; break;
+                        case 'o': replacement = "<italic>"; break;
+                        default: replacement = "<reset>";
+                    }
+                }
+            }
+            matcher.appendReplacement(converted, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(converted);
+        return converted.toString();
     }
 
     private static String colorMiniMessage(String input) {

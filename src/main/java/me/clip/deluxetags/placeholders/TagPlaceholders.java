@@ -38,7 +38,8 @@ public class TagPlaceholders extends PlaceholderExpansion {
 
     @Override
     public String onRequest(OfflinePlayer offlinePlayer, String params) {
-        if (params.startsWith("tag_")) {
+        if (params.startsWith("tag_") && !params.equals("tag_legacy")
+            && !params.equals("tag_mini") && !params.equals("tag_stripped")) {
             DeluxeTag tag = plugin.getTagsHandler().getTagByIdentifier(params.substring(4));
             if (tag == null) {
                 return "invalid tag";
@@ -99,10 +100,15 @@ public class TagPlaceholders extends PlaceholderExpansion {
                 }
                 return MsgUtils.color(tag.getIdentifier());
             case "tag":
+            case "tag_legacy":
                 if (tag == null) {
                     return "";
                 }
                 return MsgUtils.color(tag.getDisplayTag(player));
+            case "tag_mini":
+                return tag == null ? "" : MsgUtils.toMiniMessage(tag.getDisplayTag(player));
+            case "tag_stripped":
+                return tag == null ? "" : MsgUtils.stripFormatting(tag.getDisplayTag(player));
         }
 
         return null;
